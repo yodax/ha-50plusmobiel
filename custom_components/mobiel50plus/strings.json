@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a 50+ Mobiel account",
+        "description": "Add credentials for one 50+ Mobiel account. Add this integration again to track additional accounts.",
+        "data": {
+          "username": "Email address",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This account is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "remaining_mb": {
+        "name": "Data bundle remaining"
+      },
+      "bundle_size_mb": {
+        "name": "Data bundle size"
+      },
+      "data_percentage": {
+        "name": "Data bundle remaining percentage"
+      },
+      "remaining_minutes": {
+        "name": "Calling minutes remaining"
+      },
+      "remaining_sms": {
+        "name": "SMS remaining"
+      },
+      "days_to_bundle_refresh": {
+        "name": "Days until bundle refresh"
+      },
+      "bundle_refresh_date": {
+        "name": "Bundle refresh date"
+      },
+      "contract_end_date": {
+        "name": "Contract end date"
+      }
+    }
+  }
+}

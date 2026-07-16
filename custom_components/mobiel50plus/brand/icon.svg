@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D98A3D"/>
+      <stop offset="1" stop-color="#B96A2A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background: rounded square, a muted burnt-amber (deliberately hue/tone-shifted
+       from 50+ Mobiel's actual brand orange #EE7C00) so this reads as related but
+       distinct: an unofficial, third-party community integration, not their asset. -->
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="url(#bg)"/>
+
+  <!-- Phone body -->
+  <rect x="88" y="56" width="80" height="144" rx="16" fill="#FFF8F0"/>
+  <rect x="98" y="72" width="60" height="98" rx="4" fill="#7A4E2A"/>
+  <circle cx="128" cy="186" r="6" fill="#D98A3D"/>
+
+  <!-- Signal bars, top-right of the screen -->
+  <rect x="132" y="118" width="8" height="16" rx="2" fill="#F5C99B"/>
+  <rect x="144" y="110" width="8" height="24" rx="2" fill="#F5C99B"/>
+  <rect x="132" y="118" width="8" height="16" rx="2" fill="#F5C99B"/>
+  <rect x="108" y="86" width="34" height="6" rx="3" fill="#F5C99B"/>
+  <rect x="108" y="98" width="24" height="6" rx="3" fill="#F5C99B" opacity="0.6"/>
+
+  <!-- Data-remaining gauge ring, overlapping the phone's lower-right -->
+  <circle cx="176" cy="178" r="40" fill="#2E6B72"/>
+  <circle cx="176" cy="178" r="40" fill="none" stroke="#1F4B50" stroke-width="4"/>
+  <path d="M 176 148 A 30 30 0 1 1 148 193" fill="none" stroke="#BFE6E9" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="176" cy="178" r="15" fill="#245D63"/>
+</svg>

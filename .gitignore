@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.DS_Store
+
+# Personal deploy/test tooling — tied to one person's own infrastructure,
+# kept local rather than published in this public repo.
+.claude/skills/deploy-test/

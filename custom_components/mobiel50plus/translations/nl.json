@@ -1,0 +1,49 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "50+ Mobiel-account toevoegen",
+        "description": "Voeg de inloggegevens toe voor één 50+ Mobiel-account. Voeg deze integratie nogmaals toe om meer accounts te volgen.",
+        "data": {
+          "username": "E-mailadres",
+          "password": "Wachtwoord"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Ongeldige gebruikersnaam of wachtwoord.",
+      "unknown": "Onverwachte fout."
+    },
+    "abort": {
+      "already_configured": "Dit account is al geconfigureerd."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "remaining_mb": {
+        "name": "Resterende databundel"
+      },
+      "bundle_size_mb": {
+        "name": "Grootte databundel"
+      },
+      "data_percentage": {
+        "name": "Resterend percentage databundel"
+      },
+      "remaining_minutes": {
+        "name": "Resterende belminuten"
+      },
+      "remaining_sms": {
+        "name": "Resterende sms'jes"
+      },
+      "days_to_bundle_refresh": {
+        "name": "Dagen tot bundel vernieuwt"
+      },
+      "bundle_refresh_date": {
+        "name": "Datum bundelvernieuwing"
+      },
+      "contract_end_date": {
+        "name": "Einddatum contract"
+      }
+    }
+  }
+}
