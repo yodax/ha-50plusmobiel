@@ -1,20 +1,29 @@
 """Client for the (unofficial) mijn.50plusmobiel.nl API.
 
 mijn.50plusmobiel.nl is a client-rendered SPA backed by a GraphQL API. The
-SPA's login form drives a separate `verifyLogin` two-step (email, then
-password) endpoint with a reCAPTCHA response slot, but that flow turns out
-to be purely a UI affordance: the actual `/token/login` endpoint it ends
-with is stateless and works standalone with just username+password, no
-cookies or prior verifyLogin call required. So this client skips the
-verifyLogin dance entirely.
+portal was reworked at some point after this client was first written,
+retiring the old standalone `/token/login` endpoint (see CLAUDE.md) in
+favour of a login flow that actually requires the `verifyLogin` handshake
+the SPA form drives. This client now replicates that handshake.
 
 Endpoints (captured via devtools against a real account, see CLAUDE.md):
 
-- ``POST /token/login`` — body ``{"username": ..., "password": ...}``.
-  Always returns HTTP 200. Success is signalled by an ``access_token``
-  field (a JWT, valid ~2 years per ``expires_in``); failure by an
-  ``{"error": "invalid_grant", ...}`` body with no token — the status code
-  does *not* distinguish these.
+- ``POST /verifyLogin`` — called twice: once with just ``username`` (other
+  fields ``null``/empty) to discover the required next step, then again
+  with ``password`` and ``step: "password"`` to actually validate
+  credentials. Response is ``{"step": ...}`` — `"login"` means credentials
+  were accepted and the SPA proceeds to `/oauth/token`; any other step
+  (`"phone"`, `"recaptcha"`, `"redirect"`, ...) means an auth factor this
+  client doesn't implement is required. On bad credentials the response
+  carries a human-readable (Dutch) ``message`` field instead. Stateless —
+  no cookies are set or required between calls.
+- ``POST /oauth/token`` — body ``{"grant_type": "password", "client_id":
+  ..., "scope": "CUSTOMER", "username": ..., "password": ...}``. On success
+  returns ``{"access_token": ..., "refresh_token": ...}``; on failure
+  returns HTTP 401 with an empty body (unlike the old `/token/login`, the
+  status code *does* distinguish success/failure here, but there's no JSON
+  error body to parse). ``client_id`` is a public value read out of the
+  SPA's own JS bundle, not a secret.
 - ``POST /api/graphql`` — GraphQL endpoint, ``Authorization: Bearer
   <access_token>``. The ``getCustomerForMsisdn`` query with no
   ``selectedMsisdn`` variable returns the account's own number(s) by
@@ -35,8 +44,13 @@ from datetime import date, timedelta
 import aiohttp
 
 API_BASE = "https://mijn.50plusmobiel.nl"
-LOGIN_URL = f"{API_BASE}/token/login"
+VERIFY_LOGIN_URL = f"{API_BASE}/verifyLogin"
+TOKEN_URL = f"{API_BASE}/oauth/token"
 GRAPHQL_URL = f"{API_BASE}/api/graphql"
+
+# Public OAuth client id the SPA itself uses for the password grant (read out
+# of its JS bundle) — not a secret, just an API-consumer identifier.
+OAUTH_CLIENT_ID = "e80df68638c3ba8264d0d762da442ee0"
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
@@ -82,12 +96,33 @@ class Mobiel50PlusApiClient:
         self._access_token: str | None = None
 
     async def async_login(self) -> None:
-        """Authenticate and store a bearer token for subsequent requests."""
+        """Authenticate and store a bearer token for subsequent requests.
+
+        Mirrors the SPA's own flow: two `/verifyLogin` calls (email-only,
+        then email+password) that validate credentials, followed by
+        `/oauth/token` to actually issue the bearer token.
+        """
+        await self._async_verify_login(password=None, step=None)
+        step = await self._async_verify_login(password=self._password, step="password")
+        if step != "login":
+            raise Mobiel50PlusAuthError(
+                f"Unexpected login step '{step}' — this account may require "
+                "an authentication factor (e.g. phone/2FA) this client doesn't support"
+            )
+
         async with self._session.post(
-            LOGIN_URL,
-            json={"username": self._username, "password": self._password},
+            TOKEN_URL,
+            json={
+                "grant_type": "password",
+                "client_id": OAUTH_CLIENT_ID,
+                "scope": "CUSTOMER",
+                "username": self._username,
+                "password": self._password,
+            },
             timeout=REQUEST_TIMEOUT,
         ) as resp:
+            if resp.status == 401:
+                raise Mobiel50PlusAuthError("Login failed")
             resp.raise_for_status()
             data = await resp.json()
 
@@ -97,6 +132,26 @@ class Mobiel50PlusApiClient:
                 data.get("error_description") or data.get("error") or "Login failed"
             )
         self._access_token = access_token
+
+    async def _async_verify_login(self, *, password: str | None, step: str | None) -> str | None:
+        """Run one step of the `/verifyLogin` handshake, return the resulting step."""
+        async with self._session.post(
+            VERIFY_LOGIN_URL,
+            json={
+                "username": self._username,
+                "phoneNumber": None,
+                "password": password,
+                "step": step,
+                "response": "",
+            },
+            timeout=REQUEST_TIMEOUT,
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+
+        if data.get("message"):
+            raise Mobiel50PlusAuthError(data["message"])
+        return data.get("step")
 
     async def async_get_status(self) -> dict:
         """Fetch current bundle/usage status for the logged-in account."""

@@ -42,13 +42,39 @@ interval).
 Captured via devtools (Playwright) against a real account and confirmed
 against `api.py`'s live implementation:
 
-- **Login**: `POST https://mijn.50plusmobiel.nl/token/login`, body
-  `{"username": ..., "password": ...}`. Always returns HTTP 200 — success
-  is signalled by an `access_token` field (a JWT good for ~2 years per
-  `expires_in`), failure by `{"error": "invalid_grant", "error_description":
-  "The user credentials were incorrect.", "token": null}` with no token.
-  The status code does *not* distinguish success/failure — `api.py` checks
-  for the presence of `access_token`, not the HTTP status.
+- **Login (reworked 2026-07)**: the portal was reworked at some point after
+  this integration was first written, retiring the old standalone
+  `POST /token/login` endpoint entirely (it now 404s — this is what broke
+  a live install, surfaced as `Error communicating with 50+ Mobiel: 404,
+  ... url='https://mijn.50plusmobiel.nl/token/login'`). Re-diagnosed
+  2026-07-24 via Playwright devtools against the live portal (no valid
+  test credentials available, so only the *invalid*-credentials path was
+  observed end-to-end — the success path is inferred from the SPA's own JS
+  bundle, not confirmed against a real account). The SPA's `verifyLogin`
+  two-step is no longer just a UI affordance; it's now load-bearing:
+  1. `POST /verifyLogin`, body `{"username", "phoneNumber": null,
+     "password": null, "step": null, "response": ""}` → response
+     `{"step": "password"}` for a normal password-login account.
+  2. `POST /verifyLogin` again, same shape but `"password": <password>,
+     "step": "password"` → on success, response `{"step": "login"}`; on
+     failure, `{"message": "Ongeldige inloggegevens", "step": "password"}`
+     (confirmed live with a bogus account). Other `step` values seen in the
+     SPA's JS (`"phone"`, `"recaptcha"`, `"redirect"`) mean an auth factor
+     `api.py` doesn't implement is required — not expected for a normal
+     personal account.
+  3. Only once step 2 returns `"step": "login"` does the SPA call
+     `POST /oauth/token`, body `{"grant_type": "password", "client_id":
+     "e80df68638c3ba8264d0d762da442ee0", "scope": "CUSTOMER", "username",
+     "password"}` (`client_id` is a public value read out of the SPA's JS
+     bundle, not a secret). Per the JS, success returns `{"access_token",
+     "refresh_token"}`; live-confirmed failure (401, wrong credentials)
+     returns an *empty body*, unlike the old endpoint — so the status code
+     now *does* distinguish success/failure, but there's no JSON error
+     detail to surface on failure.
+  All three calls are stateless — confirmed no cookies are set or required
+  between them (checked via Playwright's cookie jar), so `api.py` can fire
+  them back-to-back exactly as the SPA does, with no session/CSRF plumbing
+  needed.
 - **Status**: `POST https://mijn.50plusmobiel.nl/api/graphql`, header
   `Authorization: Bearer <access_token>`, GraphQL query
   `getCustomerForMsisdn` (see `api.py`'s `STATUS_QUERY`). Response shape:
@@ -79,12 +105,14 @@ against `api.py`'s live implementation:
     "next bundle date" but came back `null` on the probed account
     (`canRenew: false`) — it appears to track *contract renewal*, not the
     monthly data reset, so `remainingBeforeBill` was used instead.
-- The SPA's login *form* actually drives a different, two-step
-  `POST /verifyLogin` endpoint (email step, then password step) with a
-  reCAPTCHA response slot — but that turned out to be a pure UI affordance.
-  `/token/login` is stateless and works standalone with just
-  username+password, no cookies or prior `verifyLogin` call needed, so
-  `api.py` skips the `verifyLogin`/reCAPTCHA dance entirely.
+- The `verifyLogin` two-step **was** a pure UI affordance when this
+  integration was first written (the old `/token/login` worked standalone,
+  so `api.py` skipped `verifyLogin` entirely) — no longer true after the
+  2026-07 portal rework, see "Login (reworked 2026-07)" above. The
+  reCAPTCHA response slot in `verifyLogin`'s payload (`"response": ""`)
+  still appears to be an unused affordance for normal accounts — sent
+  empty in both live-confirmed calls above with no recaptcha challenge
+  triggered.
 - `getCustomerForMsisdn` was called with an explicit `selectedMsisdn`
   variable in the SPA (for accounts with multiple numbers/delegated
   access), but omitting that variable returns the account's own number(s)

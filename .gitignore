@@ -11,3 +11,4 @@ venv/
 # Personal deploy/test tooling — tied to one person's own infrastructure,
 # kept local rather than published in this public repo.
 .claude/skills/deploy-test/
+.playwright-mcp/
