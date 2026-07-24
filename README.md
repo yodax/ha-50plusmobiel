@@ -214,8 +214,10 @@ and [integration-specific checks](https://www.hacs.xyz/docs/publish/integration/
 - At least one published GitHub release (not just a tag — HACS reads the
   version from a release).
 
-**Still needed for default-store inclusion** (being searchable in HACS
-without adding a custom repository URL first):
-- A submission PR to HACS's default repository list
-  ([hacs/default](https://github.com/hacs/default)), with the submitter
-  being the repo owner/maintainer.
+**Default-store inclusion** (being searchable in HACS without adding a
+custom repository URL first) is pending review:
+- Submission PR [hacs/default#9255](https://github.com/hacs/default/pull/9255)
+  is open, filed 2026-07-16 against the `v0.2.0` release, awaiting maintainer
+  review. It links to that release rather than tracking `main`, so if a
+  reviewer checks it against the latest code, re-linking to the current
+  release (currently `v0.2.1`) may be worth doing before/at merge time.
