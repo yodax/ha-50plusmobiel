@@ -198,6 +198,24 @@ against `api.py`'s live implementation:
   present on HA 2026.3.0+, `hacs.json`'s `homeassistant` floor is set to
   `2026.3.0` — anything lower would install fine but silently show no icon,
   contradicting the README.
+- **`api.py` is tested with a hand-rolled fake `aiohttp.ClientSession`, not
+  `aioresponses`.** Tried `aioresponses` first (the usual choice for mocking
+  aiohttp) — as of 0.7.9 it's incompatible with the aiohttp version Home
+  Assistant itself pins (`ClientResponse.__init__()` in that aiohttp gained
+  a required `stream_writer` kwarg aioresponses doesn't pass), so every test
+  using it fails with a `TypeError` unrelated to the code under test.
+  `tests/test_api.py`'s `FakeSession`/`FakeResponse` fake only the two
+  things `api.py` actually touches (`.post()` as an async context manager,
+  `.status`/`.json()`/`.raise_for_status()` on the result), sidestepping
+  that version coupling entirely. `tests/test_coordinator.py` and
+  `tests/test_config_flow.py` instead use
+  [`pytest-homeassistant-custom-component`](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component)'s
+  real (in-memory) `hass` fixture — that's the standard way to test a
+  config flow/coordinator against actual HA behavior (e.g. confirming
+  `ConfigEntryAuthFailed` really starts a reauth flow), and needs
+  `custom_components.mobiel50plus.config_flow` imported before the test so
+  `Mobiel50PlusConfigFlow` is registered in HA's `HANDLERS` — otherwise
+  `async_start_reauth_if_available()` silently no-ops.
 
 ## Development notes
 

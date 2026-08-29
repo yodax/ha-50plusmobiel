@@ -176,6 +176,20 @@ Other things worth automating off these sensors:
   over (the `numeric_state` trigger above already self-resets once the
   percentage climbs back above 15 on refresh).
 
+## Running tests
+
+```bash
+pip install -r requirements_test.txt
+pytest tests/
+```
+
+`tests/test_api.py` unit-tests `api.py` against a small local fake
+`aiohttp.ClientSession` (no real HTTP, no Home Assistant). `test_coordinator.py`
+and `test_config_flow.py` use Home Assistant's own test harness
+([`pytest-homeassistant-custom-component`](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component))
+to verify the coordinator/reauth-flow wiring against a real (in-memory) `hass`
+instance. Runs in CI on every push via `.github/workflows/test.yml`.
+
 ## Design decisions
 
 - **Domain name is `mobiel50plus`, not `50plusmobiel`** — HA integration
