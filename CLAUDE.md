@@ -47,11 +47,14 @@ against `api.py`'s live implementation:
   `POST /token/login` endpoint entirely (it now 404s — this is what broke
   a live install, surfaced as `Error communicating with 50+ Mobiel: 404,
   ... url='https://mijn.50plusmobiel.nl/token/login'`). Re-diagnosed
-  2026-07-24 via Playwright devtools against the live portal (no valid
-  test credentials available, so only the *invalid*-credentials path was
-  observed end-to-end — the success path is inferred from the SPA's own JS
-  bundle, not confirmed against a real account). The SPA's `verifyLogin`
-  two-step is no longer just a UI affordance; it's now load-bearing:
+  2026-07-24 via Playwright devtools against the live portal — initially
+  only the *invalid*-credentials path was observed end-to-end, with the
+  success path inferred from the SPA's own JS bundle. That inference was
+  confirmed 2026-08-29 against a real account on a live HA instance (v0.2.1,
+  dashboard cards showing real bundle data), so the full `verifyLogin` +
+  `oauth/token` handshake below is now live-verified end-to-end, not just
+  inferred. The SPA's `verifyLogin` two-step is no longer just a UI
+  affordance; it's now load-bearing:
   1. `POST /verifyLogin`, body `{"username", "phoneNumber": null,
      "password": null, "step": null, "response": ""}` → response
      `{"step": "password"}` for a normal password-login account.
@@ -150,6 +153,31 @@ against `api.py`'s live implementation:
   indefinitely, and `coordinator.py` catches `aiohttp.ClientError`/
   `asyncio.TimeoutError` as `UpdateFailed` rather than letting them surface
   as raw uncaught exceptions.
+- **GraphQL responses are validated before indexing.** `STATUS_QUERY` asks
+  for fields the SPA's own query doesn't request (`dataPercentage`,
+  `remainingBeforeBill`, `activeContract.endDate`) — exactly the surface
+  most likely to move if the vendor renames/removes a field. A renamed
+  field, or an account with no subscription group/msisdn, answers with
+  HTTP 200 and either a GraphQL `errors` array or a data shape that doesn't
+  match what `api.py` expects. `async_get_status()` checks
+  `payload.get("errors")` and catches `KeyError`/`TypeError`/`IndexError`
+  around the response indexing, raising `Mobiel50PlusApiError` (mapped to
+  `UpdateFailed` in `coordinator.py`) instead of letting a raw `TypeError`
+  reach the log.
+- **Bad credentials trigger HA's reauth flow instead of stranding the
+  entry.** `coordinator.py` raises `ConfigEntryAuthFailed` (not
+  `UpdateFailed`) specifically on `Mobiel50PlusAuthError` — a rejected
+  password, from either `verifyLogin`'s `message` field or `/oauth/token`'s
+  401 — so HA surfaces a reauth notification rather than leaving all
+  sensors silently unavailable forever. `config_flow.py` implements
+  `async_step_reauth`/`async_step_reauth_confirm` to collect the new
+  password and update the existing config entry in place. The "account
+  needs an auth factor this client doesn't support" case from
+  `async_login()` and the post-reauth GraphQL-still-401 case in
+  `async_get_status()` deliberately raise `Mobiel50PlusApiError` instead
+  (→ `UpdateFailed`) — re-entering the same password can't fix either one,
+  so routing them through reauth would just be a dead end that re-shows
+  "invalid username or password" for a problem that isn't that.
 - **Icon is an original mark, not 50+ Mobiel's logo.**
   `custom_components/mobiel50plus/brand/icon.svg` (+ rasterized
   `icon.png`/`icon@2x.png`/`logo.png`/`logo@2x.png`) is a phone/signal/
@@ -166,7 +194,10 @@ against `api.py`'s live implementation:
   `_serve_from_custom_integration`, gated on `Integration.has_branding` in
   `loader.py`) — no CDN fetch, no `home-assistant/brands` PR needed. If a
   future HA version changes this, a `home-assistant/brands` submission is
-  the fallback path, but isn't needed now.
+  the fallback path, but isn't needed now. Because that endpoint is only
+  present on HA 2026.3.0+, `hacs.json`'s `homeassistant` floor is set to
+  `2026.3.0` — anything lower would install fine but silently show no icon,
+  contradicting the README.
 
 ## Development notes
 

@@ -7,9 +7,10 @@ import logging
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import Mobiel50PlusApiClient, Mobiel50PlusAuthError
+from .api import Mobiel50PlusApiClient, Mobiel50PlusApiError, Mobiel50PlusAuthError
 from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,16 +23,18 @@ class Mobiel50PlusCoordinator(DataUpdateCoordinator[dict]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=f"{DOMAIN} ({entry.title})",
             update_interval=DEFAULT_SCAN_INTERVAL,
         )
         self.client = client
-        self.entry = entry
 
     async def _async_update_data(self) -> dict:
         try:
             return await self.client.async_get_status()
         except Mobiel50PlusAuthError as err:
-            raise UpdateFailed(f"Authentication failed: {err}") from err
+            raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
+        except Mobiel50PlusApiError as err:
+            raise UpdateFailed(str(err)) from err
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise UpdateFailed(f"Error communicating with 50+ Mobiel: {err}") from err

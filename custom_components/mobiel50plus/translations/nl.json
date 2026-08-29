@@ -8,6 +8,13 @@
           "username": "E-mailadres",
           "password": "Wachtwoord"
         }
+      },
+      "reauth_confirm": {
+        "title": "50+ Mobiel opnieuw verifiëren",
+        "description": "Het wachtwoord voor {username} werkt niet meer. Voer het huidige wachtwoord in om dit account opnieuw te verbinden.",
+        "data": {
+          "password": "Wachtwoord"
+        }
       }
     },
     "error": {
@@ -15,7 +22,8 @@
       "unknown": "Onverwachte fout."
     },
     "abort": {
-      "already_configured": "Dit account is al geconfigureerd."
+      "already_configured": "Dit account is al geconfigureerd.",
+      "reauth_successful": "Opnieuw verifiëren is gelukt."
     }
   },
   "entity": {

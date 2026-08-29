@@ -14,6 +14,10 @@ what it does. The icon above is an original design, not 50+ Mobiel's logo.
 
 ## Installation
 
+Requires **Home Assistant 2026.3.0 or newer** — that's the version the
+in-tree branding icon needs to render (see `hacs.json`'s `homeassistant`
+floor); older HA versions will install fine but show no icon.
+
 ### HACS (recommended)
 
 A tagged GitHub release is published, so HACS can install this today as a

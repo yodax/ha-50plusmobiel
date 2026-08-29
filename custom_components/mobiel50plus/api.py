@@ -86,6 +86,10 @@ class Mobiel50PlusAuthError(Exception):
     """Raised when login fails."""
 
 
+class Mobiel50PlusApiError(Exception):
+    """Raised when the API returns an unexpected or unusable response."""
+
+
 class Mobiel50PlusApiClient:
     """Talks to the 50+ Mobiel customer portal API."""
 
@@ -105,7 +109,9 @@ class Mobiel50PlusApiClient:
         await self._async_verify_login(password=None, step=None)
         step = await self._async_verify_login(password=self._password, step="password")
         if step != "login":
-            raise Mobiel50PlusAuthError(
+            # Not a credentials problem — re-entering the password won't fix
+            # this, so it shouldn't route through HA's reauth flow.
+            raise Mobiel50PlusApiError(
                 f"Unexpected login step '{step}' — this account may require "
                 "an authentication factor (e.g. phone/2FA) this client doesn't support"
             )
@@ -164,35 +170,58 @@ class Mobiel50PlusApiClient:
             await self.async_login()
             payload = await self._async_graphql_status()
             if payload is None:
-                raise Mobiel50PlusAuthError("Status fetch failed after re-authenticating")
+                # Login just succeeded, so this isn't a credentials problem —
+                # don't route it through HA's reauth flow.
+                raise Mobiel50PlusApiError("Status fetch failed after re-authenticating")
 
-        subscription_group = payload["data"]["me"]["subscriptionGroups"][0]
-        balance = subscription_group["msisdns"][0]["balance"]
+        try:
+            errors = payload.get("errors")
+            if errors:
+                message = "; ".join(
+                    error.get("message", "unknown error")
+                    if isinstance(error, dict)
+                    else str(error)
+                    for error in errors
+                )
+                raise Mobiel50PlusApiError(f"GraphQL error: {message}")
 
-        days_to_bundle_refresh = subscription_group.get("remainingBeforeBill")
-        bundle_refresh_date = (
-            date.today() + timedelta(days=days_to_bundle_refresh)
-            if days_to_bundle_refresh is not None
-            else None
-        )
+            subscription_group = payload["data"]["me"]["subscriptionGroups"][0]
+            balance = subscription_group["msisdns"][0]["balance"]
+            if balance is None:
+                raise TypeError("balance is null")
 
-        active_contract = subscription_group.get("activeContract")
-        contract_end_date = (
-            date.fromisoformat(active_contract["endDate"])
-            if active_contract and active_contract.get("endDate")
-            else None
-        )
+            days_to_bundle_refresh = subscription_group.get("remainingBeforeBill")
+            bundle_refresh_date = (
+                date.today() + timedelta(days=days_to_bundle_refresh)
+                if days_to_bundle_refresh is not None
+                else None
+            )
 
-        return {
-            "remaining_mb": balance["dataAvailable"],
-            "bundle_size_mb": balance["dataAssigned"],
-            "remaining_minutes": balance["voiceAvailable"],
-            "remaining_sms": balance["smsAvailable"],
-            "data_percentage": balance["dataPercentage"],
-            "days_to_bundle_refresh": days_to_bundle_refresh,
-            "bundle_refresh_date": bundle_refresh_date,
-            "contract_end_date": contract_end_date,
-        }
+            active_contract = subscription_group.get("activeContract")
+            contract_end_date = (
+                date.fromisoformat(active_contract["endDate"])
+                if active_contract and active_contract.get("endDate")
+                else None
+            )
+
+            status = {
+                "remaining_mb": balance["dataAvailable"],
+                "bundle_size_mb": balance["dataAssigned"],
+                "remaining_minutes": balance["voiceAvailable"],
+                "remaining_sms": balance["smsAvailable"],
+                "data_percentage": balance["dataPercentage"],
+                "days_to_bundle_refresh": days_to_bundle_refresh,
+                "bundle_refresh_date": bundle_refresh_date,
+                "contract_end_date": contract_end_date,
+            }
+        except Mobiel50PlusApiError:
+            raise
+        except (KeyError, TypeError, IndexError, ValueError, AttributeError) as err:
+            raise Mobiel50PlusApiError(
+                f"Unexpected response shape from 50+ Mobiel API: {err}"
+            ) from err
+
+        return status
 
     async def _async_graphql_status(self) -> dict | None:
         """Run the status GraphQL query. Returns None on a 401 (bad/expired token)."""
