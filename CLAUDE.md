@@ -122,6 +122,30 @@ against `api.py`'s live implementation:
   by default — one round-trip instead of two (`api.py` doesn't call the
   separate `msisdns` query the SPA also uses).
 
+## Cutting a release
+
+HACS installs whatever the **latest GitHub release** points at, but the
+version it displays — and the one HA logs at startup — comes from
+`manifest.json` inside that archive, so the two must be bumped together.
+There is no release workflow; releases are created by hand:
+
+```bash
+# 1. bump "version" in custom_components/mobiel50plus/manifest.json
+# 2. commit + push to main (this runs Validate / hassfest / Test)
+# 3. tag the release
+gh release create vX.Y.Z --title "..." --notes "..."
+```
+
+Tag name is `v` + the exact manifest version. **Step 3 also triggers Validate
+on the tag**, where the `manifest-version` job asserts exactly that. Skipping
+the step-1 bump otherwise ships an archive whose reported version is wrong
+forever — nothing in HACS or hassfest compares the two, and upstream
+`sirkirby/unifi-network-rules` shipped every tagged archive one version behind
+for exactly this reason (their #157). The job is **detective, not preventive**:
+`gh release create` publishes the release and the tag in one step, so a red run
+means delete the release *and* the tag, fix `manifest.json`, and re-cut. Watch
+the tag's run, not just `main`'s.
+
 ## Design decisions
 
 - **Domain name is `mobiel50plus`, not `50plusmobiel`** — HA integration
