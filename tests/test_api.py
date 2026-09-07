@@ -10,12 +10,19 @@ library's version compatibility.
 """
 from __future__ import annotations
 
+import os
+import time
 from datetime import date, timedelta
+from zoneinfo import ZoneInfo
 
 import aiohttp
 import pytest
+from freezegun import freeze_time
+from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from custom_components.mobiel50plus.api import (
+    ACCOUNT_NAME_QUERY,
     GRAPHQL_URL,
     TOKEN_URL,
     VERIFY_LOGIN_URL,
@@ -53,13 +60,28 @@ GOOD_STATUS_PAYLOAD = {
 
 
 class FakeResponse:
-    """Stands in for an aiohttp `ClientResponse` used as an async context manager."""
+    """Stands in for an aiohttp `ClientResponse` used as an async context manager.
 
-    def __init__(self, *, status: int = 200, json_data: object = None) -> None:
+    `raises` injects an exception from `.json()`, which the fake could not do
+    before: an independent review pointed out that the fake always decoded
+    successfully, so a method documented as never raising could still leak a
+    `ValueError` or a `TimeoutError` past its own tests.
+    """
+
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        json_data: object = None,
+        raises: BaseException | None = None,
+    ) -> None:
         self.status = status
         self._json_data = {} if json_data is None else json_data
+        self._raises = raises
 
     async def json(self) -> object:
+        if self._raises is not None:
+            raise self._raises
         return self._json_data
 
     def raise_for_status(self) -> None:
@@ -187,7 +209,9 @@ class TestAsyncGetStatus:
             "remaining_sms": None,
             "data_percentage": 79,
             "days_to_bundle_refresh": 18,
-            "bundle_refresh_date": date.today() + timedelta(days=18),
+            # Home Assistant's timezone, not the process's — see
+            # TestBundleRefreshDateTimezone for the edge this protects.
+            "bundle_refresh_date": dt_util.now().date() + timedelta(days=18),
             "contract_end_date": date(2027, 1, 1),
         }
         assert session.calls[-1][0] == GRAPHQL_URL
@@ -365,4 +389,239 @@ class TestAsyncGetStatus:
         )
 
         with pytest.raises(Mobiel50PlusApiError, match="Unexpected response shape"):
+            await client.async_get_status()
+
+
+class TestBundleRefreshDateTimezone:
+    """`bundle_refresh_date` must be derived from Home Assistant's configured
+    timezone, not from whatever timezone the container process happens to run in.
+
+    FAILING-FIRST: against the pre-fix `date.today()` implementation,
+    `test_uses_ha_timezone_not_process_timezone` returned date(2026, 2, 2) —
+    one day early — because at 23:30 UTC the process (TZ=UTC) is still on the
+    15th while Home Assistant's configured Europe/Amsterdam is already on the
+    16th. Verified failing before the fix landed.
+    """
+
+    @pytest.fixture
+    def utc_process_clock(self):
+        """Pin the *process* clock to UTC, whatever this machine is set to.
+
+        Restores TZ by hand rather than via monkeypatch: monkeypatch undoes its
+        setenv *after* this fixture's teardown, so a `tzset()` here ran while TZ
+        was still "UTC" and left libc pinned to UTC for the rest of the session
+        on any non-UTC runner. The environment has to be put back first.
+        """
+        original = os.environ.get("TZ")
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        try:
+            yield
+        finally:
+            if original is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = original
+            time.tzset()
+
+    async def test_uses_ha_timezone_not_process_timezone(
+        self, hass: HomeAssistant, utc_process_clock: None
+    ) -> None:
+        # Home Assistant's own timezone, deliberately not the process's. Set
+        # through hass so the test harness restores it (writing
+        # dt_util.DEFAULT_TIME_ZONE directly leaks into later tests).
+        await hass.config.async_set_time_zone("Europe/Amsterdam")
+        assert dt_util.DEFAULT_TIME_ZONE == ZoneInfo("Europe/Amsterdam")
+
+        client, _session = make_client(
+            [*full_login_responses(), FakeResponse(json_data=GOOD_STATUS_PAYLOAD)]
+        )
+
+        # 23:30 UTC on the 15th is already 00:30 on the 16th in Amsterdam.
+        with freeze_time("2026-01-15 23:30:00"):
+            assert date.today() == date(2026, 1, 15)  # the process disagrees
+            result = await client.async_get_status()
+
+        # 16 Jan + 18 days = 3 Feb. Via date.today() it would be 2 Feb.
+        assert result["bundle_refresh_date"] == date(2026, 2, 3)
+
+    async def test_matches_process_date_when_timezones_agree(
+        self, hass: HomeAssistant, utc_process_clock: None
+    ) -> None:
+        """Sanity check on the other side of the edge — same day, same answer."""
+        await hass.config.async_set_time_zone("UTC")
+        client, _session = make_client(
+            [*full_login_responses(), FakeResponse(json_data=GOOD_STATUS_PAYLOAD)]
+        )
+
+        with freeze_time("2026-01-15 23:30:00"):
+            result = await client.async_get_status()
+
+        assert result["bundle_refresh_date"] == date(2026, 2, 2)
+
+
+class TestAsyncGetAccountFirstName:
+    """The naming lookup used by the config flow.
+
+    FAILING-FIRST: every test in this class failed with ImportError /
+    AttributeError before `ACCOUNT_NAME_QUERY` and
+    `async_get_account_first_name()` existed.
+    """
+
+    async def test_returns_only_the_first_name(self) -> None:
+        """The API returns a whole Customer object; only one field comes back."""
+        client, session = make_client(
+            [
+                *full_login_responses(),
+                FakeResponse(
+                    json_data={"data": {"me": {"firstName": "Sam"}}}
+                ),
+            ]
+        )
+
+        assert await client.async_get_account_first_name() == "Sam"
+        # The query itself asks for nothing but the first name — no lastName,
+        # no email, no iban, no invoiceAddress.
+        sent_query = session.calls[-1][1]["json"]["query"]
+        assert sent_query == ACCOUNT_NAME_QUERY
+        for field in ("lastName", "email", "iban", "invoiceAddress", "msisdn"):
+            assert field not in sent_query
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"data": {"me": {"firstName": None}}}, id="null-name"),
+            pytest.param({"data": {"me": {"firstName": "   "}}}, id="blank-name"),
+            pytest.param({"data": {"me": {}}}, id="field-absent"),
+            pytest.param({"data": {"me": None}}, id="null-me"),
+            pytest.param({"data": None}, id="null-data"),
+            pytest.param({}, id="empty-payload"),
+            pytest.param(
+                {"errors": [{"message": "Cannot query field firstName"}]},
+                id="graphql-error",
+            ),
+            pytest.param({"data": {"me": {"firstName": 42}}}, id="non-string"),
+        ],
+    )
+    async def test_unusable_answers_return_none_rather_than_raising(
+        self, payload: dict
+    ) -> None:
+        """A missing display name must never block adding the integration."""
+        client, _session = make_client(
+            [*full_login_responses(), FakeResponse(json_data=payload)]
+        )
+
+        assert await client.async_get_account_first_name() is None
+
+    async def test_expired_token_returns_none_without_crashing(self) -> None:
+        client, _session = make_client([*full_login_responses(), FakeResponse(status=401)])
+
+        assert await client.async_get_account_first_name() is None
+
+    async def test_logs_in_first_when_no_token_yet(self) -> None:
+        client, session = make_client(
+            [*full_login_responses(), FakeResponse(json_data={"data": {"me": {"firstName": "Dean"}}})]
+        )
+
+        assert await client.async_get_account_first_name() == "Dean"
+        assert [call[0] for call in session.calls] == [
+            VERIFY_LOGIN_URL,
+            VERIFY_LOGIN_URL,
+            TOKEN_URL,
+            GRAPHQL_URL,
+        ]
+
+
+class TestRequestsAreShapedCorrectly:
+    """The fake answers any request, so what was *sent* needs asserting directly."""
+
+    async def test_status_query_carries_the_bearer_token(self) -> None:
+        client, session = make_client(
+            [*full_login_responses(), FakeResponse(json_data=GOOD_STATUS_PAYLOAD)]
+        )
+
+        await client.async_get_status()
+
+        url, kwargs = session.calls[-1]
+        assert url == GRAPHQL_URL
+        assert kwargs["headers"] == {"Authorization": "Bearer tok-123"}
+        assert kwargs["json"]["operationName"] == "getCustomerForMsisdn"
+
+    async def test_name_query_carries_the_bearer_token(self) -> None:
+        client, session = make_client(
+            [
+                *full_login_responses(),
+                FakeResponse(json_data={"data": {"me": {"firstName": "Sam"}}}),
+            ]
+        )
+
+        await client.async_get_account_first_name()
+
+        _url, kwargs = session.calls[-1]
+        assert kwargs["headers"] == {"Authorization": "Bearer tok-123"}
+        assert kwargs["json"]["operationName"] == "getCustomerName"
+
+    async def test_login_never_sends_the_password_in_the_first_step(self) -> None:
+        client, session = make_client(full_login_responses())
+
+        await client.async_login()
+
+        first_verify = session.calls[0][1]["json"]
+        assert first_verify["password"] is None
+        assert first_verify["step"] is None
+        assert session.calls[1][1]["json"]["step"] == "password"
+
+
+class TestAccountNameLookupReallyNeverRaises:
+    """FAILING-FIRST: with the narrower `except (aiohttp.ClientError, ...)` this
+    method used to have, both of these propagated out of a method whose
+    docstring promised it never raises. Verified failing before the fix.
+    """
+
+    @pytest.mark.parametrize(
+        "raises",
+        [
+            pytest.param(TimeoutError("timed out"), id="timeout"),
+            pytest.param(ValueError("not json"), id="json-decode-error"),
+            pytest.param(aiohttp.ClientError("connection reset"), id="client-error"),
+            pytest.param(RuntimeError("something else entirely"), id="unexpected"),
+        ],
+    )
+    async def test_returns_none_instead_of_raising(self, raises: BaseException) -> None:
+        client, _session = make_client(
+            [*full_login_responses(), FakeResponse(raises=raises)]
+        )
+
+        assert await client.async_get_account_first_name() is None
+
+    async def test_a_failed_login_also_returns_none(self) -> None:
+        client, _session = make_client(
+            [
+                FakeResponse(json_data={"step": "password"}),
+                FakeResponse(json_data={"message": "Ongeldige inloggegevens"}),
+            ]
+        )
+
+        assert await client.async_get_account_first_name() is None
+
+
+class TestStatusStillRaisesOnUnusableResponses:
+    """The broad `except` on the *name* lookup must not have been copied onto
+    the status path, where a silent None would mean silently wrong sensors."""
+
+    @pytest.mark.parametrize(
+        "raises",
+        [
+            pytest.param(ValueError("not json"), id="json-decode-error"),
+            pytest.param(TimeoutError("timed out"), id="timeout"),
+        ],
+    )
+    async def test_decode_and_timeout_errors_propagate(
+        self, raises: BaseException
+    ) -> None:
+        client, _session = make_client(
+            [*full_login_responses(), FakeResponse(raises=raises)]
+        )
+
+        with pytest.raises(type(raises)):
             await client.async_get_status()

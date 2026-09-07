@@ -35,13 +35,20 @@ this endpoint) exposes more than the SPA's own query uses:
 need to compute it from dataAvailable/dataAssigned), ``SubscriptionGroup
 .remainingBeforeBill`` gives days until the data bundle resets, and
 ``SubscriptionGroup.activeContract.endDate`` gives the contract end date.
-All three are included in ``STATUS_QUERY`` below.
+All three are included in ``STATUS_QUERY`` below. ``Customer.firstName`` is
+also on the schema and is used — via ``ACCOUNT_NAME_QUERY``, once, at config
+time — to give the config entry a human-readable title instead of the
+account's email address. The ``Customer`` type carries plenty more
+(``lastName``, ``email``, ``iban``, ``invoiceAddress``, ...); the query asks
+for the one field it needs and ``async_get_account_first_name()`` returns only
+that string, so nothing wider ever reaches the caller.
 """
 from __future__ import annotations
 
 from datetime import date, timedelta
 
 import aiohttp
+from homeassistant.util import dt as dt_util
 
 API_BASE = "https://mijn.50plusmobiel.nl"
 VERIFY_LOGIN_URL = f"{API_BASE}/verifyLogin"
@@ -77,6 +84,16 @@ query getCustomerForMsisdn {
         }
       }
     }
+  }
+}
+"""
+
+
+# Deliberately one field. See async_get_account_first_name().
+ACCOUNT_NAME_QUERY = """
+query getCustomerName {
+  me {
+    firstName
   }
 }
 """
@@ -191,8 +208,14 @@ class Mobiel50PlusApiClient:
                 raise TypeError("balance is null")
 
             days_to_bundle_refresh = subscription_group.get("remainingBeforeBill")
+            # dt_util.now() is Home Assistant's *configured* timezone, which is
+            # not necessarily the container process's. `date.today()` was right
+            # here only by the coincidence of the two matching; on a UTC
+            # container (the common case) with a European HA timezone it is a
+            # day early for part of every night, silently. See
+            # TestBundleRefreshDateTimezone.
             bundle_refresh_date = (
-                date.today() + timedelta(days=days_to_bundle_refresh)
+                dt_util.now().date() + timedelta(days=days_to_bundle_refresh)
                 if days_to_bundle_refresh is not None
                 else None
             )
@@ -223,15 +246,48 @@ class Mobiel50PlusApiClient:
 
         return status
 
+    async def async_get_account_first_name(self) -> str | None:
+        """The account holder's first name, or None if it can't be determined.
+
+        Used only to give a config entry a title that isn't the account's email
+        address. Returns *just the name*: the `me` query would happily hand back
+        a whole `Customer` (last name, email, IBAN, invoice address), and none of
+        that should travel any further than this method.
+
+        Never raises — genuinely, for anything. A display name is a nicety, and
+        failing to fetch one must not stop somebody adding the integration; the
+        caller falls back to the email's local part. The broad `except` is
+        deliberate: an earlier version listed `aiohttp.ClientError` and the
+        shape errors, and still let a request timeout and a JSON decode error
+        (`ValueError`) escape a method whose docstring promised it would not.
+        """
+        try:
+            if self._access_token is None:
+                await self.async_login()
+            payload = await self._async_graphql(ACCOUNT_NAME_QUERY, "getCustomerName")
+            if payload is None or payload.get("errors"):
+                return None
+            first_name = payload["data"]["me"]["firstName"]
+        except Exception:  # noqa: BLE001
+            return None
+
+        if not isinstance(first_name, str):
+            return None
+        return first_name.strip() or None
+
     async def _async_graphql_status(self) -> dict | None:
         """Run the status GraphQL query. Returns None on a 401 (bad/expired token)."""
+        return await self._async_graphql(STATUS_QUERY, "getCustomerForMsisdn")
+
+    async def _async_graphql(self, query: str, operation_name: str) -> dict | None:
+        """POST one GraphQL query. Returns None on a 401 (bad/expired token)."""
         async with self._session.post(
             GRAPHQL_URL,
             headers={"Authorization": f"Bearer {self._access_token}"},
             json={
-                "operationName": "getCustomerForMsisdn",
+                "operationName": operation_name,
                 "variables": {},
-                "query": STATUS_QUERY,
+                "query": query,
             },
             timeout=REQUEST_TIMEOUT,
         ) as resp:

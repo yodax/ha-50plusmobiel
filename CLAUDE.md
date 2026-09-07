@@ -168,15 +168,103 @@ the tag's run, not just `main`'s.
   this as a custom repository. Default-store inclusion (searchable in HACS
   without adding a custom repository URL first) is the remaining step — see
   README's "HACS registration" section.
-- **Polling interval defaults to 30 minutes** (`const.py`,
-  `DEFAULT_SCAN_INTERVAL`) — a conservative default for an unofficial,
-  reverse-engineered API; tighten only if 50+ Mobiel's portal turns out to
-  tolerate more frequent polling without rate-limiting/blocking. All API
+- **Polling interval defaults to 1 hour** (`const.py`,
+  `DEFAULT_SCAN_INTERVAL`, raised from 30 minutes in v0.3.0) — a conservative
+  default for an unofficial, reverse-engineered API; tighten only if 50+
+  Mobiel's portal turns out to tolerate more frequent polling without
+  rate-limiting/blocking. An hour costs the README's low-data automation
+  nothing: a monthly bundle takes weeks to drain, so the notification still
+  fires within an hour of the threshold. All API
   requests also carry a 30s `aiohttp.ClientTimeout` (`api.py`'s
   `REQUEST_TIMEOUT`) so a stalled portal can't hang a poll cycle
   indefinitely, and `coordinator.py` catches `aiohttp.ClientError`/
   `asyncio.TimeoutError` as `UpdateFailed` rather than letting them surface
   as raw uncaught exceptions.
+- **Config entry titles are never the username.** `config_flow.py`'s
+  `account_title()` picks the account holder's first name
+  (`Customer.firstName`, fetched once via `ACCOUNT_NAME_QUERY`), else the
+  email's local part, else `DEFAULT_ACCOUNT_NAME`. HA slugifies the entry
+  title into the device name and from there into every `entity_id` and
+  friendly name, so the old `title=user_input[CONF_USERNAME]` put a real
+  email address into `sensor.<address>_data_bundle_remaining` and into any
+  dashboard YAML a user shares. `unique_id` is deliberately unchanged (still
+  the lowercased username): it is invisible, and it is what stops the same
+  account being added twice.
+  - **`firstName` is the *contract holder's* name, not the login's.**
+    Confirmed live: four accounts on one contract, four different login
+    emails, all returning the same first name. So `account_title()`
+    disambiguates a collision with an existing entry's title
+    (case-insensitively) by appending the local part — `Michael (dean)` —
+    because four entries all titled "Michael" would be worse than the address
+    they replace.
+  - **`async_get_account_first_name()` returns only the string.** The `me`
+    query would hand back a whole `Customer` (`lastName`, `email`, `iban`,
+    `invoiceAddress`, ...); `ACCOUNT_NAME_QUERY` asks for the one field and
+    the method returns `str | None`, never raising — a display name is a
+    nicety and must not block adding the integration.
+  - **Existing entries are not renamed.** The reauth flow deliberately passes
+    no `title=`. Entity IDs are fixed at creation, so an install predating
+    v0.3.0 keeps its IDs, dashboards and automations; migrating them is a
+    separate decision.
+- **Dates come from HA's timezone, not the process's.** `api.py` derives
+  `bundle_refresh_date` with `dt_util.now().date()`, not `date.today()`. The
+  latter is the *container's* local date; it was correct only by the
+  coincidence of the HA container's TZ matching HA's configured timezone. On
+  a UTC container (the common case) with a European HA timezone it is a day
+  early for part of every night, silently.
+  `TestBundleRefreshDateTimezone` pins this with a frozen clock at 23:30 UTC
+  and a deliberately mismatched process timezone.
+- **Polling carries a stable per-install offset.** `coordinator.py`'s
+  `poll_jitter()` hashes the config entry's `entry_id` with **`hashlib`, not
+  the builtin `hash()`** (which is salted per process and would re-roll the
+  offset on every HA restart while still reading as deterministic) and
+  phase-shifts the *first* scheduled poll by 0–15 minutes; every later poll
+  inherits the phase. Seeded from `entry_id` rather than `unique_id` so two
+  HA instances tracking the same account still get different offsets, and so
+  no email address enters the calculation. Implemented by lending the base
+  class a longer `update_interval` for one `_schedule_refresh()` call rather
+  than reimplementing HA's scheduling — `_schedule_refresh` and
+  `_retry_after` are private API, so that override is the piece most likely
+  to need attention on an HA upgrade — they are therefore read through
+  `getattr`, so an HA version that renames or drops one degrades to "no
+  offset" rather than raising. Verified against the HA in this repo's venv
+  (2026.8.3); **not** verified against `hacs.json`'s 2026.3.0 floor. `test_schedule.py`'s
+  `test_offset_is_stable_across_processes` is the only test that catches the
+  `hash()` mistake; verified by swapping `hash()` back in, where it fails and
+  every other test in the file still passes.
+- **A leak gate runs on commit.** `.githooks/` (ported from the sibling
+  `ha-trappers` repo, whose header documents three earlier versions that
+  looked installed and guarded nothing) blocks RFC1918 addresses, JWTs,
+  IBANs, homelab vocabulary, Dutch mobile numbers and email addresses in both
+  the staged diff and the commit message. Identity-specific patterns load
+  from outside the repo. It is **not** enabled by cloning — `git config
+  core.hooksPath .githooks`. `.githooks/test-pre-commit.sh` (75 cases) must
+  stay green; it caught two real holes in the phone-number patterns and one
+  false positive on `icon@2x.png` while being written.
+  - **Do not exempt file extensions from the email pattern.** The first
+    version did, and its list contained `sh`, `md`, `py` and `zip` — every one
+    of them also a real TLD, so any address on one of those was invisible to
+    the gate. (Writing that sentence with a literal sample address in it is
+    what the gate blocked on the first attempt at this commit; the worked
+    examples live in `.githooks/test-pre-commit.sh`, which is exempt from the
+    generic patterns precisely so it can contain them.)
+    The exemption is anchored on the retina-density marker `@<digits>x`
+    instead, which is the only filename shape that actually parses as an
+    address here.
+  - **The harness's block marker is `leak check: BLOCKED`, not `leak check:`.**
+    The shorter prefix also appears in the *success* path's "generic patterns
+    only" warning, so any unrelated crash printing it satisfied
+    `should_block()` without the secret being detected. Cases that expect an
+    abort rather than a detection set `EXPECT_MARKER`.
+- **v0.3.0 was reviewed by an independent model (codex) before release**, over
+  the whole diff and explicitly including the verification method. It found
+  six real defects that the author's own tests did not: the file-extension
+  hole above, the loose harness marker, a 1-in-900 flaky offset test, missed
+  and false-positive phone shapes, an offset consumed even when it was never
+  applied (`pref_disable_polling`/`_retry_after`), and a `tzset()` teardown
+  ordering bug. All six are fixed with regression tests. Worth repeating on
+  the next substantial change — every one of them was in a place the author
+  had already written a passing test.
 - **GraphQL responses are validated before indexing.** `STATUS_QUERY` asks
   for fields the SPA's own query doesn't request (`dataPercentage`,
   `remainingBeforeBill`, `activeContract.endDate`) — exactly the surface

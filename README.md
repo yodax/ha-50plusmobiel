@@ -54,18 +54,28 @@ separate setting needed. Other languages fall back to English.
 | Data bundle size | MB | |
 | Data bundle remaining percentage | % | Server-computed, not derived client-side |
 | Days until bundle refresh | days | |
-| Bundle refresh date | date | `today + days until bundle refresh` |
+| Bundle refresh date | date | today + days until bundle refresh, in **HA's** timezone |
 | Contract end date | date | `unknown` if the account has no active contract |
 | Calling minutes remaining | min | `unknown`/unavailable on unlimited plans — expected, not a bug |
 | SMS remaining | count | `unknown`/unavailable on unlimited plans — expected, not a bug |
 
 ## Polling & refresh interval
 
-- Each account polls independently on a **30-minute interval**
+- Each account polls independently on a **1-hour interval**
   (`DEFAULT_SCAN_INTERVAL` in `const.py`) — deliberately conservative since
-  this talks to an unofficial, reverse-engineered API. It isn't currently
+  this talks to an unofficial, reverse-engineered API. A monthly data bundle
+  simply does not move fast enough for a shorter interval to buy anything:
+  the low-data automation below still fires within an hour of crossing its
+  threshold, on a bundle that takes weeks to drain. It isn't currently
   exposed as a configurable option in the UI; if you want a different
   interval, edit `DEFAULT_SCAN_INTERVAL` and redeploy.
+- On top of that interval, each install applies a **fixed offset of up to 15
+  minutes**, derived by hashing the config entry's id. It is stable across
+  restarts and spread across the window, so a few hundred copies of this
+  integration are very unlikely to hit a small MVNO's portal at the same
+  moment — 15 minutes is 900 one-second slots, but hashing distributes rather
+  than guarantees, so two installs *can* land on the same second. It never
+  delays the first fetch at setup, only the polls after it.
 - Every request carries a 30-second timeout, and a slow/unreachable portal
   surfaces as a normal HA "unavailable" state (`UpdateFailed`) rather than
   crashing the integration.
@@ -188,7 +198,28 @@ pytest tests/
 and `test_config_flow.py` use Home Assistant's own test harness
 ([`pytest-homeassistant-custom-component`](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component))
 to verify the coordinator/reauth-flow wiring against a real (in-memory) `hass`
-instance. Runs in CI on every push via `.github/workflows/test.yml`.
+instance. `test_schedule.py` covers the per-install polling offset, including a
+subprocess check that it stays stable under a different `PYTHONHASHSEED` — the
+only way to catch the builtin `hash()` being used in place of `hashlib`. Runs in
+CI on every push via `.github/workflows/test.yml`.
+
+## Contributing: the leak guard
+
+This repo is public and developed against real household accounts, and the API
+returns live mobile numbers. `.githooks/` holds a pre-commit and commit-msg gate
+that blocks private addresses, mobile numbers, IBANs, JWTs and homelab paths in
+both the staged diff and the commit message. Enable it after cloning:
+
+```bash
+git config core.hooksPath .githooks   # git does not do this for you
+.githooks/test-pre-commit.sh          # 75 cases; must be green
+```
+
+Identity-specific patterns load from a file **outside** the repo
+(`~/.config/mobiel50plus/leak-patterns.txt`, or `$MOBIEL50PLUS_LEAK_PATTERNS`) —
+a public repo cannot carry the list of strings it is guarding. Without that file
+the generic half still runs and the hook says so, which is the right behaviour
+for an outside contributor.
 
 ## Design decisions
 
@@ -204,9 +235,23 @@ instance. Runs in CI on every push via `.github/workflows/test.yml`.
 - **Entity names are translated, not hardcoded** — see [Language](#language)
   above; strings live in `strings.json`/`translations/*.json` and follow the
   standard HA i18n pattern (`translation_key` + `has_entity_name`).
-- **Polling interval defaults to 30 minutes**, conservative for an
-  unofficial, reverse-engineered API — see [Polling & refresh
+- **Polling interval defaults to 1 hour**, conservative for an
+  unofficial, reverse-engineered API, plus a stable per-install offset of up
+  to 15 minutes so installs don't poll in lockstep — see [Polling & refresh
   interval](#polling--refresh-interval) above.
+- **Config entry titles are display names, never the account's email
+  address.** Home Assistant slugifies an entry's title into the device name
+  and from there into every `entity_id` and friendly name, so titling an
+  entry with the login address would put that address into
+  `sensor.<address>_data_bundle_remaining` — and into any dashboard YAML you
+  share. New entries are titled from the account holder's first name, falling
+  back to the email's local part (never the domain). **Existing entries are
+  left exactly as they are**, so entity IDs, dashboards and automations on an
+  install predating v0.3.0 keep working untouched.
+- **Bundle refresh date follows Home Assistant's timezone**, not the
+  container process's — `dt_util.now()`, not `date.today()`. On a UTC
+  container with a European HA timezone the two disagree for part of every
+  night, and the date would be silently a day early.
 - **Icon is an original mark, not 50+ Mobiel's logo** — see `CLAUDE.md` for
   the reasoning and where it's served from.
 
