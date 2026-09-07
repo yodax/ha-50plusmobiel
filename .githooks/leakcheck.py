@@ -276,11 +276,24 @@ def added_lines_from_staged_diff() -> list[tuple[str, str]]:
     return added
 
 
+# The banner names which gate fired. Both hooks share this scanner, and an
+# earlier version had them print byte-identical text — so a harness case
+# asserting "the staged-content gate caught this" was equally satisfied by the
+# *message* gate firing on a fixture that happened to carry the same string in
+# both places. The secret would never have been in the staged diff, the content
+# scanner would never have matched, and the test would still go green. Naming
+# the scope also spares a blocked human working out which of two hooks stopped
+# them.
+CONTENT_SCOPE = "staged changes"
+MESSAGE_SCOPE = "commit message"
+
+
 def scan(
     entries: list[tuple[str, str]],
     private: list[tuple[str, str]],
     *,
     apply_generic_exemption: bool,
+    scope_label: str,
 ) -> bool:
     """Report any match. Returns True if something was blocked."""
     failed = False
@@ -288,7 +301,7 @@ def scan(
         [(p, w, True) for p, w in GENERIC] + [(p, w, False) for p, w in private]
     ):
         rx = re.compile(pattern, re.IGNORECASE)
-        scope = [
+        in_scope = [
             (f, t)
             for f, t in entries
             if not (
@@ -297,13 +310,13 @@ def scan(
                 and f.startswith(GENERIC_EXEMPT_PREFIX)
             )
         ]
-        hits = [(f, t) for f, t in scope if rx.search(t)]
+        hits = [(f, t) for f, t in in_scope if rx.search(t)]
         if not hits:
             continue
         if not failed:
             sys.stderr.write(
-                "\nleak check: BLOCKED — this commit contains content that must not be "
-                "published.\n\n"
+                "\nleak check: BLOCKED (%s) — this commit contains content that must "
+                "not be published.\n\n" % scope_label
             )
             failed = True
         sys.stderr.write("  %s:\n" % why)
@@ -347,10 +360,15 @@ def main(argv: list[str]) -> int:
             entries = [("commit message", line.rstrip("\n")) for line in fh]
         # No path, so no .githooks/ exemption applies: a commit message has no
         # legitimate reason to contain a sample LAN address.
-        failed = scan(entries, private, apply_generic_exemption=False)
+        failed = scan(
+            entries, private, apply_generic_exemption=False, scope_label=MESSAGE_SCOPE
+        )
     else:
         failed = scan(
-            added_lines_from_staged_diff(), private, apply_generic_exemption=True
+            added_lines_from_staged_diff(),
+            private,
+            apply_generic_exemption=True,
+            scope_label=CONTENT_SCOPE,
         )
 
     if failed:

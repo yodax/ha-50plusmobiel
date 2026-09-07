@@ -91,10 +91,10 @@ msg_should_block() {
   _commit_msg "$2" || rc=$?
   case "$rc" in
     0) echo "FAIL: commit-msg did NOT block: $1"; fail=$((fail + 1)) ;;
-    1) if printf '%s' "$LAST_OUT" | grep -qF "${EXPECT_MARKER:-$BLOCK_MARKER}"; then
+    1) if printf '%s' "$LAST_OUT" | grep -qF "${EXPECT_MARKER:-$MSG_BLOCK_MARKER}"; then
          echo "ok:   blocked $1"; pass=$((pass + 1))
        else
-         echo "FAIL: commit failed, but not with ${EXPECT_MARKER:-$BLOCK_MARKER}: $1"
+         echo "FAIL: commit failed, but not with ${EXPECT_MARKER:-$MSG_BLOCK_MARKER}: $1"
          printf '%s\n' "$LAST_OUT" | sed 's/^/    /'; fail=$((fail + 1))
        fi ;;
     *) echo "FAIL: harness error on: $1"; fail=$((fail + 1)) ;;
@@ -117,13 +117,24 @@ msg_should_pass() {
 # as "blocked" is the same fail-open the hook itself once had, one level up. So a
 # block only counts if the scanner said so in its own words.
 #
-# The marker is the BLOCKED banner, not the bare "leak check:" prefix an earlier
-# version used. That prefix also appears in the *success* path's "generic
-# patterns only" warning and in the abort messages for a corrupt pattern file —
-# so any unrelated crash that happened to print it satisfied should_block()
-# without the secret ever being detected. Cases that expect an abort rather than
-# a detection set EXPECT_MARKER explicitly.
-BLOCK_MARKER="leak check: BLOCKED"
+# The marker is the BLOCKED banner *with its scope*, and two earlier versions of
+# it were both too loose:
+#
+#   "leak check:"          — also printed by the SUCCESS path's "generic patterns
+#                            only" warning and by the pattern-file abort messages,
+#                            so any unrelated crash that printed it satisfied
+#                            should_block() with nothing detected.
+#   "leak check: BLOCKED"  — narrower, but identical for both hooks, so a case
+#                            asserting the staged-content gate fired was equally
+#                            satisfied by the commit-MESSAGE gate firing on a
+#                            fixture carrying the same string in both places.
+#
+# Each gate now names itself, and each case asserts the specific one. The two
+# abort paths carry their own EXPECT_MARKER rather than loosening these.
+# `test_scope_markers_are_distinguishable` below reproduces the false pass and
+# fails if it ever returns.
+BLOCK_MARKER="leak check: BLOCKED (staged changes)"
+MSG_BLOCK_MARKER="leak check: BLOCKED (commit message)"
 
 should_block() {
   local rc=0
@@ -310,5 +321,40 @@ PROBE_PATH='café.txt' should_block "LAN address in a non-ASCII filename" \
   'the box lives at 192.168.8.60'
 unset PROBE_PATH
 
+echo "── the two gates must be distinguishable (meta-check) ──"
+# Reproduces the false pass this marker scheme exists to prevent: a commit whose
+# staged content is CLEAN but whose MESSAGE carries a secret. Under a shared
+# marker, a staged-content assertion accepted this. It must now be reported as a
+# commit-message block and must NOT satisfy the staged-content marker.
+fresh_repo
+printf 'nothing to see here\n' > "$SCRATCH/probe.txt"
+git -C "$SCRATCH" add probe.txt
+META_OUT=$(git -C "$SCRATCH" commit -m 'staged on 192.168.8.60' 2>&1) || true
+if printf '%s' "$META_OUT" | grep -qF "$MSG_BLOCK_MARKER" &&
+   ! printf '%s' "$META_OUT" | grep -qF "$BLOCK_MARKER"; then
+  echo "ok:   a message-only secret reports as the commit-message gate, not content"
+  pass=$((pass + 1))
+else
+  echo "FAIL: the two gates are not distinguishable; output was:"
+  printf '%s\n' "$META_OUT" | sed 's/^/    /'
+  fail=$((fail + 1))
+fi
+
+# And the inverse: a content-only secret must not claim the message gate fired.
+fresh_repo
+printf 'host 192.168.8.60\n' > "$SCRATCH/probe.txt"
+git -C "$SCRATCH" add probe.txt
+META_OUT=$(git -C "$SCRATCH" commit -m 'an entirely clean message' 2>&1) || true
+if printf '%s' "$META_OUT" | grep -qF "$BLOCK_MARKER" &&
+   ! printf '%s' "$META_OUT" | grep -qF "$MSG_BLOCK_MARKER"; then
+  echo "ok:   a content-only secret reports as the staged-content gate, not message"
+  pass=$((pass + 1))
+else
+  echo "FAIL: the two gates are not distinguishable; output was:"
+  printf '%s\n' "$META_OUT" | sed 's/^/    /'
+  fail=$((fail + 1))
+fi
+
+echo
 echo "pre-commit leak-guard: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

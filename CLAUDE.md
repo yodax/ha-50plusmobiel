@@ -238,7 +238,7 @@ the tag's run, not just `main`'s.
   IBANs, homelab vocabulary, Dutch mobile numbers and email addresses in both
   the staged diff and the commit message. Identity-specific patterns load
   from outside the repo. It is **not** enabled by cloning — `git config
-  core.hooksPath .githooks`. `.githooks/test-pre-commit.sh` (75 cases) must
+  core.hooksPath .githooks`. `.githooks/test-pre-commit.sh` (77 cases) must
   stay green; it caught two real holes in the phone-number patterns and one
   false positive on `icon@2x.png` while being written.
   - **Do not exempt file extensions from the email pattern.** The first
@@ -251,11 +251,21 @@ the tag's run, not just `main`'s.
     The exemption is anchored on the retina-density marker `@<digits>x`
     instead, which is the only filename shape that actually parses as an
     address here.
-  - **The harness's block marker is `leak check: BLOCKED`, not `leak check:`.**
-    The shorter prefix also appears in the *success* path's "generic patterns
-    only" warning, so any unrelated crash printing it satisfied
-    `should_block()` without the secret being detected. Cases that expect an
-    abort rather than a detection set `EXPECT_MARKER`.
+  - **Each gate names itself in its banner, and the harness asserts the
+    specific one.** Two earlier markers were both too loose. `leak check:`
+    also appears in the *success* path's "generic patterns only" warning, so
+    any unrelated crash printing it satisfied `should_block()` with nothing
+    detected. `leak check: BLOCKED` was narrower but *identical for both
+    hooks*, so a staged-content assertion was equally satisfied by the
+    commit-**message** gate firing on a fixture carrying the same string in
+    both places — the secret never in the staged diff, the content scanner
+    never matching, the test still green. The banner is now
+    `leak check: BLOCKED (staged changes)` / `... (commit message)`, and the
+    harness's last two cases reproduce that false pass in both directions and
+    fail if it returns. Verified by collapsing the two scopes back to one
+    string, which fails them and eight message cases. Raised by the
+    `ha-trappers-build` session, which hit the same thing independently.
+    Cases that expect an abort rather than a detection set `EXPECT_MARKER`.
 - **v0.3.0 was reviewed by an independent model (codex) before release**, over
   the whole diff and explicitly including the verification method. It found
   six real defects that the author's own tests did not: the file-extension

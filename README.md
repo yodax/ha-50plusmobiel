@@ -212,7 +212,7 @@ both the staged diff and the commit message. Enable it after cloning:
 
 ```bash
 git config core.hooksPath .githooks   # git does not do this for you
-.githooks/test-pre-commit.sh          # 75 cases; must be green
+.githooks/test-pre-commit.sh          # 77 cases; must be green
 ```
 
 Identity-specific patterns load from a file **outside** the repo
