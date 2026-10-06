@@ -63,7 +63,7 @@ def account_title(
     ]
     base = next((c for c in candidates if c and "@" not in c), DEFAULT_ACCOUNT_NAME)
 
-    # Case-insensitively: "Michael" and "michael" slugify to the same prefix.
+    # Case-insensitively: "Robin" and "robin" slugify to the same prefix.
     taken = {title.casefold() for title in existing_titles}
     if base.casefold() not in taken:
         return base

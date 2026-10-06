@@ -520,10 +520,10 @@ class TestAsyncGetAccountFirstName:
 
     async def test_logs_in_first_when_no_token_yet(self) -> None:
         client, session = make_client(
-            [*full_login_responses(), FakeResponse(json_data={"data": {"me": {"firstName": "Dean"}}})]
+            [*full_login_responses(), FakeResponse(json_data={"data": {"me": {"firstName": "Alex"}}})]
         )
 
-        assert await client.async_get_account_first_name() == "Dean"
+        assert await client.async_get_account_first_name() == "Alex"
         assert [call[0] for call in session.calls] == [
             VERIFY_LOGIN_URL,
             VERIFY_LOGIN_URL,

@@ -194,8 +194,8 @@ the tag's run, not just `main`'s.
     Confirmed live: four accounts on one contract, four different login
     emails, all returning the same first name. So `account_title()`
     disambiguates a collision with an existing entry's title
-    (case-insensitively) by appending the local part — `Michael (dean)` —
-    because four entries all titled "Michael" would be worse than the address
+    (case-insensitively) by appending the local part — `Robin (alex)` —
+    because four entries all titled "Robin" would be worse than the address
     they replace.
   - **`async_get_account_first_name()` returns only the string.** The `me`
     query would hand back a whole `Customer` (`lastName`, `email`, `iban`,

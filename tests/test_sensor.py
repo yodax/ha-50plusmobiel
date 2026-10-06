@@ -23,7 +23,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.mobiel50plus.const import CONF_PASSWORD, CONF_USERNAME, DOMAIN
 
-USERNAME = "sam@kroes.example"
+USERNAME = "sam@acme.example"
 PASSWORD = "hunter2"
 
 # An unlimited calling/SMS plan: the API returns null, which must surface as
@@ -76,8 +76,8 @@ async def test_no_entity_id_contains_the_account_email(hass: HomeAssistant) -> N
     for entity_id in entity_ids:
         assert USERNAME not in entity_id
         # The slugified form is what actually lands in an entity_id.
-        assert "sam_kroes_example" not in entity_id
-        assert "kroes" not in entity_id
+        assert "sam_acme_example" not in entity_id
+        assert "acme" not in entity_id
     assert "sensor.sam_data_bundle_remaining" in entity_ids
 
 

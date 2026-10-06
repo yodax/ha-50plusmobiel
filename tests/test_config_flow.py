@@ -192,9 +192,9 @@ async def test_user_step_falls_back_to_the_email_local_part(
     hass: HomeAssistant,
 ) -> None:
     """No first name from the API — the local part, never the domain."""
-    result = await _run_user_step(hass, "dean@kroes.example", None)
+    result = await _run_user_step(hass, "alex@acme.example", None)
 
-    assert result["title"] == "dean"
+    assert result["title"] == "alex"
 
 
 async def test_user_step_falls_back_to_a_constant_without_a_local_part(
@@ -209,10 +209,10 @@ async def test_user_step_never_titles_an_entry_with_an_address_shaped_first_name
     hass: HomeAssistant,
 ) -> None:
     """Defence in depth: an address arriving in `firstName` is still not a title."""
-    result = await _run_user_step(hass, "dean@kroes.example", "dean@kroes.example")
+    result = await _run_user_step(hass, "alex@acme.example", "alex@acme.example")
 
     assert "@" not in result["title"]
-    assert result["title"] == "dean"
+    assert result["title"] == "alex"
 
 
 async def test_user_step_title_survives_a_failed_name_lookup(
@@ -227,7 +227,7 @@ async def test_user_step_title_survives_a_failed_name_lookup(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
         result = await hass.config_entries.flow.async_configure(
-            result["flow_id"], {CONF_USERNAME: "sam@kroes.example", CONF_PASSWORD: PASSWORD}
+            result["flow_id"], {CONF_USERNAME: "sam@acme.example", CONF_PASSWORD: PASSWORD}
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -245,31 +245,31 @@ async def test_second_household_account_gets_a_distinct_title(
     """
     MockConfigEntry(
         domain=DOMAIN,
-        title="Michael",
-        unique_id="michael@example.invalid",
-        data={CONF_USERNAME: "michael@example.invalid", CONF_PASSWORD: PASSWORD},
+        title="Robin",
+        unique_id="user@example.invalid",
+        data={CONF_USERNAME: "user@example.invalid", CONF_PASSWORD: PASSWORD},
     ).add_to_hass(hass)
 
-    result = await _run_user_step(hass, "dean@kroes.example", "Michael")
+    result = await _run_user_step(hass, "alex@acme.example", "Robin")
 
-    assert result["title"] == "Michael (dean)"
+    assert result["title"] == "Robin (alex)"
     assert "@" not in result["title"]
 
 
 async def test_title_collision_is_matched_case_insensitively(
     hass: HomeAssistant,
 ) -> None:
-    """"michael" and "Michael" slugify to the same entity_id prefix."""
+    """"robin" and "Robin" slugify to the same entity_id prefix."""
     MockConfigEntry(
         domain=DOMAIN,
-        title="michael",
-        unique_id="michael@example.invalid",
-        data={CONF_USERNAME: "michael@example.invalid", CONF_PASSWORD: PASSWORD},
+        title="robin",
+        unique_id="user@example.invalid",
+        data={CONF_USERNAME: "user@example.invalid", CONF_PASSWORD: PASSWORD},
     ).add_to_hass(hass)
 
-    result = await _run_user_step(hass, "dean@kroes.example", "Michael")
+    result = await _run_user_step(hass, "alex@acme.example", "Robin")
 
-    assert result["title"] == "Michael (dean)"
+    assert result["title"] == "Robin (alex)"
 
 
 async def test_reauth_does_not_rename_an_existing_entry(hass: HomeAssistant) -> None:
@@ -288,7 +288,7 @@ async def test_reauth_does_not_rename_an_existing_entry(hass: HomeAssistant) -> 
 
     with (
         patch(LOGIN_PATCH_TARGET, new=AsyncMock(return_value=None)),
-        patch(NAME_PATCH_TARGET, new=AsyncMock(return_value="Michael")),
+        patch(NAME_PATCH_TARGET, new=AsyncMock(return_value="Robin")),
     ):
         result = await entry.start_reauth_flow(hass)
         result = await hass.config_entries.flow.async_configure(
